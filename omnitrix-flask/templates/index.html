@@ -3443,8 +3443,11 @@ window.runALNS=async function(){
       }
     };
 
-    // SSE ile Flask backend'e bağlan
-    const response=await fetch('/api/solve',{
+    onLog('⏳ ALNS motoru çalıştırılıyor (Python backend)...');
+    onProgress({iter:0,total:cfg.maxIter,bestObj:'—',temp:cfg.saTemp});
+
+    // Senkron API çağrısı — SSE'den daha güvenilir (Render/gunicorn uyumlu)
+    const response=await fetch('/api/solve-sync',{
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body:JSON.stringify(payload)
@@ -3452,44 +3455,12 @@ window.runALNS=async function(){
 
     if(!response.ok) throw new Error(`HTTP ${response.status}: ${response.statusText}`);
 
-    const reader=response.body.getReader();
-    const decoder=new TextDecoder();
-    let buffer='';
-    let result=null;
+    const result=await response.json();
+    if(!result.success) throw new Error(result.error||'Sunucu hatası');
 
-    while(true){
-      const{done,value}=await reader.read();
-      if(done)break;
-      buffer+=decoder.decode(value,{stream:true});
-
-      // SSE mesajlarını parse et
-      const lines=buffer.split('\n');
-      buffer=lines.pop()||'';
-
-      let eventType='';
-      let eventData='';
-      for(const line of lines){
-        if(line.startsWith('event: ')){
-          eventType=line.slice(7).trim();
-        }else if(line.startsWith('data: ')){
-          eventData=line.slice(6);
-          // Event'i işle
-          try{
-            const parsed=JSON.parse(eventData);
-            if(eventType==='progress') onProgress(parsed);
-            else if(eventType==='log') onLog(parsed.message);
-            else if(eventType==='result') result=parsed;
-            else if(eventType==='error') throw new Error(parsed.message);
-          }catch(parseErr){
-            if(eventType==='error') throw parseErr;
-            // JSON parse hatası sessizce atla
-          }
-          eventType='';eventData='';
-        }
-      }
-    }
-
-    if(!result) throw new Error('Sunucudan sonuç alınamadı');
+    // Logları göster
+    (result.logs||[]).forEach(msg=>onLog(msg));
+    onProgress({iter:cfg.maxIter,total:cfg.maxIter,bestObj:result.final_stats.obj,temp:0});
 
     // Sonucu sakla (server tarafında D formatına dönüştürülmüş halde)
     lastALNSSolution={
